@@ -31,3 +31,29 @@ function TestBasic:test_coroutine()
     local r = coroutine.yield()
     lu.assertEquals(r, 42)
 end
+
+function TestBasic:test_pad_analog_override_api()
+    local axes = PCSX.CONSTS.PAD.AXIS
+    lu.assertEquals({ axes.RIGHT_X, axes.RIGHT_Y, axes.LEFT_X, axes.LEFT_Y }, { 0, 1, 2, 3 })
+
+    local pad = PCSX.SIO0.slots[1].pads[1]
+    for _, value in ipairs({ 0, 128, 255 }) do
+        lu.assertTrue(pcall(pad.setAnalogOverride, value, value, value, value))
+        lu.assertTrue(pcall(pad.setAnalogOverrideMode, true))
+        lu.assertTrue(pcall(pad.setAnalogOverrideMode, false))
+        lu.assertTrue(pcall(function() pad:setAnalogOverride(value, value, value, value) end))
+        lu.assertTrue(pcall(function() pad:setAnalogOverrideMode(true) end))
+        lu.assertTrue(pcall(function() pad:setAnalogOverrideMode(false) end))
+    end
+
+    for _, values in ipairs({
+        { -1, 128, 128, 128 }, { 128, 256, 128, 128 }, { 128, 128, 0.5, 128 },
+        { 128, 128, 128, "128" }, { 128, 128, 128 },
+    }) do
+        lu.assertFalse(pcall(pad.setAnalogOverride, table.unpack(values)))
+    end
+    for _, value in ipairs({ 0, 1, "true" }) do
+        lu.assertFalse(pcall(pad.setAnalogOverrideMode, value))
+    end
+    lu.assertFalse(pcall(pad.setAnalogOverrideMode))
+end

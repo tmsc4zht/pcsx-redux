@@ -156,7 +156,13 @@ class PadsImpl : public PCSX::Pads {
 
         // Analog stick values in range (0 - 255) where 128 = center
         uint8_t rightJoyX, rightJoyY, leftJoyX, leftJoyY;
+
+        // Analog values overriding controller input from Lua.
+        std::array<uint8_t, 4> analogOverrides{};
+        bool analogOverride = false;
     };
+
+    enum class AnalogAxis : uint8_t { RightX, RightY, LeftX, LeftY, Count };
 
     enum class PadCommands : uint8_t {
         Idle = 0x00,
@@ -501,6 +507,7 @@ void PadsImpl::Pad::reset() {
     m_currentByte = 0;
     m_data.buttonStatus = 0xffff;
     m_data.overrides = 0xffff;
+    m_data.analogOverride = false;
 }
 
 void PadsImpl::map() {
@@ -850,6 +857,10 @@ uint8_t PadsImpl::Pad::startPoll() {
 uint8_t PadsImpl::Pad::read() {
     const PadData& pad = m_data;
     uint16_t buttonStatus = pad.buttonStatus & pad.overrides & pad.hostButtons;
+    const auto analogValue = [&pad](AnalogAxis axis, uint8_t input) {
+        const auto index = magic_enum::enum_integer(axis);
+        return pad.analogOverride ? pad.analogOverrides[index] : input;
+    };
     if (!m_settings.get<SettingConnected>()) {
         m_bufferLen = 0;
         return 0xff;
@@ -896,10 +907,10 @@ uint8_t PadsImpl::Pad::read() {
                 m_analogpar[0] = 0x73;
                 m_analogpar[2] = buttonStatus & 0xff;
                 m_analogpar[3] = buttonStatus >> 8;
-                m_analogpar[4] = pad.rightJoyX;
-                m_analogpar[5] = pad.rightJoyY;
-                m_analogpar[6] = pad.leftJoyX;
-                m_analogpar[7] = pad.leftJoyY;
+                m_analogpar[4] = analogValue(AnalogAxis::RightX, pad.rightJoyX);
+                m_analogpar[5] = analogValue(AnalogAxis::RightY, pad.rightJoyY);
+                m_analogpar[6] = analogValue(AnalogAxis::LeftX, pad.leftJoyX);
+                m_analogpar[7] = analogValue(AnalogAxis::LeftY, pad.leftJoyY);
 
                 memcpy(m_buf, m_analogpar, 8);
                 m_bufferLen = 8;
@@ -1336,6 +1347,18 @@ void PadsImpl::setLua(PCSX::Lua L) {
     L.setfield("SQUARE");
 
     L.pop();
+
+    L.getfieldtable("AXIS");
+    L.push(lua_Number(magic_enum::enum_integer(AnalogAxis::RightX)));
+    L.setfield("RIGHT_X");
+    L.push(lua_Number(magic_enum::enum_integer(AnalogAxis::RightY)));
+    L.setfield("RIGHT_Y");
+    L.push(lua_Number(magic_enum::enum_integer(AnalogAxis::LeftX)));
+    L.setfield("LEFT_X");
+    L.push(lua_Number(magic_enum::enum_integer(AnalogAxis::LeftY)));
+    L.setfield("LEFT_Y");
+
+    L.pop();
     L.pop();
     L.pop();
 
@@ -1412,6 +1435,41 @@ void PadsImpl::setLua(PCSX::Lua L) {
                 unsigned button = L.checknumber(1);
                 button = 1 << button;
                 overrides |= button;
+                return 0;
+            },
+            -1);
+        L.declareFunc(
+            "setAnalogOverride",
+            [this, pad](PCSX::Lua L) -> int {
+                const int argument = L.istable(1) ? 2 : 1;
+                if (L.gettop() < argument + 3 || L.type(argument) != LUA_TNUMBER ||
+                    L.type(argument + 1) != LUA_TNUMBER || L.type(argument + 2) != LUA_TNUMBER ||
+                    L.type(argument + 3) != LUA_TNUMBER) {
+                    return L.error("setAnalogOverride expects four integer values from 0 to 255");
+                }
+                const auto validValue = [&L](int index) {
+                    const lua_Number value = L.checknumber(index);
+                    return std::isfinite(value) && std::floor(value) == value && value >= 0 && value <= 255;
+                };
+                if (!validValue(argument) || !validValue(argument + 1) || !validValue(argument + 2) ||
+                    !validValue(argument + 3)) {
+                    return L.error("setAnalogOverride expects four integer values from 0 to 255");
+                }
+                auto& data = m_pads[pad].m_data;
+                for (unsigned axis = 0; axis < data.analogOverrides.size(); ++axis) {
+                    data.analogOverrides[axis] = static_cast<uint8_t>(L.checknumber(argument + axis));
+                }
+                return 0;
+            },
+            -1);
+        L.declareFunc(
+            "setAnalogOverrideMode",
+            [this, pad](PCSX::Lua L) -> int {
+                const int argument = L.istable(1) ? 2 : 1;
+                if (L.gettop() < argument || L.type(argument) != LUA_TBOOLEAN) {
+                    return L.error("setAnalogOverrideMode expects a boolean");
+                }
+                m_pads[pad].m_data.analogOverride = L.toboolean(argument);
                 return 0;
             },
             -1);
